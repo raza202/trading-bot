@@ -1,14 +1,31 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import os
+import smtplib
+from datetime import datetime, timezone
+from email.message import EmailMessage
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, EmailStr, Field
 
-app = FastAPI(title="IKRAAZ Trading Bot API")
+ENV = os.getenv("ENVIRONMENT", "development")
+IS_PRODUCTION = ENV.lower() == "production"
+
+app = FastAPI(
+    title="IKRAAZ Trading Bot API",
+    docs_url=None if IS_PRODUCTION else "/docs",
+    redoc_url=None if IS_PRODUCTION else "/redoc",
+    openapi_url="/openapi.json" if not IS_PRODUCTION else None,
+)
 
 Timeframe = Literal["15m", "30m", "1h"]
 SignalType = Literal["BUY", "SELL", "WAIT"]
+
+
+class AlertRequest(BaseModel):
+    recipient: EmailStr
+    symbol: str = Field(min_length=1, max_length=10)
 
 
 TOP_PSX_STOCKS = [
@@ -38,9 +55,45 @@ SIGNAL_BY_SYMBOL: dict[str, dict[str, float | SignalType]] = {
 }
 
 
+def get_stock_and_signal(symbol: str) -> tuple[dict[str, str | float], dict[str, float | SignalType]]:
+    normalized = symbol.upper()
+    stock_data = next((item for item in TOP_PSX_STOCKS if item["symbol"] == normalized), None)
+    if stock_data is None:
+        raise HTTPException(status_code=404, detail=f"Symbol '{normalized}' not found")
+    signal_data = SIGNAL_BY_SYMBOL.get(normalized, {"signal": "WAIT", "confidence": 0.5})
+    return stock_data, signal_data
+
+
+def send_email_alert(recipient: str, symbol: str, signal: SignalType, confidence: float, price: float) -> None:
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+    smtp_sender = os.getenv("SMTP_SENDER", smtp_user or "")
+
+    if not all([smtp_host, smtp_user, smtp_password, smtp_sender]):
+        raise HTTPException(
+            status_code=500,
+            detail="SMTP is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_SENDER.",
+        )
+
+    msg = EmailMessage()
+    msg["Subject"] = f"Trading Alert: {symbol} {signal}"
+    msg["From"] = smtp_sender
+    msg["To"] = recipient
+    msg.set_content(
+        f"Symbol: {symbol}\nSignal: {signal}\nConfidence: {confidence:.2f}\nPrice: {price}\nGenerated at: {datetime.now(timezone.utc).isoformat()}"
+    )
+
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as smtp:
+        smtp.starttls()
+        smtp.login(smtp_user, smtp_password)
+        smtp.send_message(msg)
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "message": "IKRAAZ ENGINE RUNNING"}
+    return {"status": "ok", "message": "IKRAAZ ENGINE RUNNING", "environment": ENV}
 
 
 @app.get("/stocks")
@@ -50,12 +103,7 @@ def stocks() -> list[dict[str, str | float]]:
 
 @app.get("/stock/{symbol}")
 def stock(symbol: str) -> dict[str, str | float | SignalType]:
-    normalized = symbol.upper()
-    stock_data = next((item for item in TOP_PSX_STOCKS if item["symbol"] == normalized), None)
-    if stock_data is None:
-        raise HTTPException(status_code=404, detail=f"Symbol '{normalized}' not found")
-
-    signal_data = SIGNAL_BY_SYMBOL.get(normalized, {"signal": "WAIT", "confidence": 0.5})
+    stock_data, signal_data = get_stock_and_signal(symbol)
     return {
         **stock_data,
         "signal": signal_data["signal"],
@@ -67,7 +115,7 @@ def stock(symbol: str) -> dict[str, str | float | SignalType]:
 def signals() -> dict[str, object]:
     return {
         "timeframe": "15m",
-        "updated_at": datetime.now(UTC).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
         "signals": [
             {
                 **stock,
@@ -97,6 +145,25 @@ def timeframe(timeframe: Timeframe) -> dict[str, object]:
 
     return {
         "timeframe": timeframe,
-        "updated_at": datetime.now(UTC).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
         "signals": adjusted_signals,
+    }
+
+
+@app.post("/alerts/email")
+def create_email_alert(request: AlertRequest) -> dict[str, str | float]:
+    stock_data, signal_data = get_stock_and_signal(request.symbol)
+    send_email_alert(
+        recipient=request.recipient,
+        symbol=stock_data["symbol"],
+        signal=signal_data["signal"],
+        confidence=float(signal_data["confidence"]),
+        price=float(stock_data["price"]),
+    )
+    return {
+        "status": "sent",
+        "recipient": request.recipient,
+        "symbol": str(stock_data["symbol"]),
+        "signal": str(signal_data["signal"]),
+        "confidence": float(signal_data["confidence"]),
     }
