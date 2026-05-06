@@ -7,41 +7,52 @@ from .scorer import RuleBasedScorer
 
 @dataclass(frozen=True)
 class SignalResult:
-    decision: str
+    signal: str
+    confidence: float
     score: int
     buy_confirmations: int
     sell_confirmations: int
+    trace: dict[str, object]
 
 
 class SignalEngine:
-    """Combines indicator outputs into BUY / SELL / WAIT decisions.
+    """Single source of truth for BUY/SELL/WAIT decisions."""
 
-    Confirmation system:
-    - BUY requires at least 2 bullish confirmations.
-    - SELL requires at least 2 bearish confirmations.
-
-    Score system:
-    - BUY when score >= 3 and confirmations condition is met.
-    - SELL when score <= -3 and confirmations condition is met.
-    - WAIT otherwise.
-    """
+    REQUIRED_VOTES = frozenset(RuleBasedScorer.DEFAULT_WEIGHTS.keys())
 
     def __init__(self, scorer: RuleBasedScorer | None = None) -> None:
         self.scorer = scorer or RuleBasedScorer()
 
-    def evaluate(self, indicator_outputs: dict[str, int]) -> SignalResult:
-        score, buy_confirmations, sell_confirmations = self.scorer.score(indicator_outputs)
+    def evaluate(self, indicator_votes: dict[str, int]) -> SignalResult:
+        missing = self.REQUIRED_VOTES - set(indicator_votes.keys())
+        if missing:
+            raise ValueError(f"Missing indicator votes: {', '.join(sorted(missing))}")
+
+        score, buy_confirmations, sell_confirmations, weighted_scores = self.scorer.score(indicator_votes)
 
         if score >= 3 and buy_confirmations >= 2:
-            decision = "BUY"
+            signal = "BUY"
         elif score <= -3 and sell_confirmations >= 2:
-            decision = "SELL"
+            signal = "SELL"
         else:
-            decision = "WAIT"
+            signal = "WAIT"
+
+        confidence = min(1.0, abs(score) / 7)
+        decision_path = (
+            f"score={score}, buy_confirmations={buy_confirmations}, "
+            f"sell_confirmations={sell_confirmations}, threshold=±3"
+        )
 
         return SignalResult(
-            decision=decision,
+            signal=signal,
+            confidence=round(confidence, 4),
             score=score,
             buy_confirmations=buy_confirmations,
             sell_confirmations=sell_confirmations,
+            trace={
+                "indicators_used": sorted(indicator_votes.keys()),
+                "votes": indicator_votes,
+                "scores": weighted_scores,
+                "final_decision_path": decision_path,
+            },
         )
