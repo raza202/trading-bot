@@ -4,53 +4,46 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class IndicatorSignal:
-    """Represents one indicator output and its directional vote."""
-
+class IndicatorVote:
     name: str
-    direction: int
+    value: int
 
 
 class RuleBasedScorer:
-    """Scores indicator confirmations using fixed, deterministic weights."""
+    """Scores normalized indicator votes using explicit weights."""
 
     DEFAULT_WEIGHTS: dict[str, int] = {
-        "ema_trend": 2,
+        "moving_averages": 2,
         "rsi": 1,
         "fibonacci": 1,
-        "candlestick": 1,
+        "candlesticks": 1,
         "trendline": 2,
     }
 
     def __init__(self, weights: dict[str, int] | None = None) -> None:
         self.weights = dict(weights or self.DEFAULT_WEIGHTS)
 
-    def score(self, indicator_outputs: dict[str, int]) -> tuple[int, int, int]:
-        """Return (total_score, buy_confirmations, sell_confirmations).
+    def score(self, indicator_votes: dict[str, int]) -> tuple[int, int, int, dict[str, int]]:
+        unknown = [key for key in indicator_votes if key not in self.weights]
+        if unknown:
+            raise ValueError(f"Unknown indicator keys: {', '.join(sorted(unknown))}")
 
-        indicator_outputs values must be one of:
-        - 1 for bullish confirmation
-        - -1 for bearish confirmation
-        - 0 for neutral/no confirmation
-        """
-
+        weighted_scores: dict[str, int] = {}
         total_score = 0
         buy_confirmations = 0
         sell_confirmations = 0
 
-        for indicator_name, direction in indicator_outputs.items():
-            if direction not in (-1, 0, 1):
-                raise ValueError(
-                    f"Invalid direction '{direction}' for '{indicator_name}'. "
-                    "Expected -1, 0, or 1."
-                )
+        for name, vote in indicator_votes.items():
+            if vote not in (-1, 0, 1):
+                raise ValueError(f"Invalid vote '{vote}' for '{name}'. Expected -1, 0, or 1.")
 
-            weight = self.weights.get(indicator_name, 0)
-            total_score += direction * weight
-
-            if direction > 0:
+            if vote > 0:
                 buy_confirmations += 1
-            elif direction < 0:
+            elif vote < 0:
                 sell_confirmations += 1
 
-        return total_score, buy_confirmations, sell_confirmations
+            weighted = vote * self.weights[name]
+            weighted_scores[name] = weighted
+            total_score += weighted
+
+        return total_score, buy_confirmations, sell_confirmations, weighted_scores

@@ -7,74 +7,30 @@
     <style>
       body { margin: 0; font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; }
       .container { max-width: 980px; margin: 40px auto; padding: 24px; background: #111827; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); }
-      h1 { margin: 0 0 8px; }
-      .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; }
-      .status { color: #22c55e; font-weight: 700; margin: 0; }
-      select { background: #1f2937; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px; padding: 8px; }
-      table { width: 100%; border-collapse: collapse; }
-      th, td { padding: 12px; border-bottom: 1px solid #334155; text-align: left; }
-      th { background: #1f2937; }
-      .badge { padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; display: inline-block; }
-      .BUY { background: rgba(34,197,94,0.2); color: #22c55e; }
-      .SELL { background: rgba(239,68,68,0.2); color: #ef4444; }
-      .WAIT { background: rgba(245,158,11,0.2); color: #f59e0b; }
-      .meta { color: #94a3b8; font-size: 13px; margin: 8px 0 0; }
     </style>
   </head>
   <body>
     <div class="container">
       <h1>IKRAAZ Stock Dashboard (Top 10 PSX)</h1>
-      <div class="toolbar">
-        <p class="status">IKRAAZ ENGINE RUNNING</p>
-        <label>
-          Timeframe:
-          <select id="timeframe">
-            <option value="15m">15m</option>
-            <option value="30m">30m</option>
-            <option value="1h">1h</option>
-          </select>
-        </label>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Symbol</th><th>Name</th><th>Price (PKR)</th><th>Signal</th><th>Confidence</th>
-          </tr>
-        </thead>
-        <tbody id="stocks-body"></tbody>
-      </table>
-      <p class="meta" id="updated-at">Last updated: --</p>
+      <label>Timeframe: <select id="timeframe"><option>15m</option><option>30m</option><option>1h</option></select></label>
+      <table><thead><tr><th>Symbol</th><th>Name</th><th>Price</th><th>Signal</th><th>Confidence</th></tr></thead><tbody id="stocks-body"></tbody></table>
+      <p id="updated-at">Last updated: --</p>
     </div>
-
     <script>
-      const API_BASE = "http://localhost:8000";
+      const envBase = window.__IKRAAZ_API_BASE_URL__;
+      const API_BASE = envBase || new URLSearchParams(window.location.search).get("apiBase") || "http://127.0.0.1:8000";
       const tableBody = document.getElementById("stocks-body");
       const timeframeSelect = document.getElementById("timeframe");
       const updatedAt = document.getElementById("updated-at");
-
-      function renderRows(items) {
-        tableBody.innerHTML = items.map((item) => `
-          <tr>
-            <td>${item.symbol}</td>
-            <td>${item.name}</td>
-            <td>${item.price.toFixed(2)}</td>
-            <td><span class="badge ${item.signal}">${item.signal}</span></td>
-            <td>${Math.round(item.confidence * 100)}%</td>
-          </tr>
-        `).join("");
-      }
-
+      function renderRows(items) { tableBody.innerHTML = items.map((item) => `<tr><td>${item.symbol}</td><td>${item.name}</td><td>${item.price.toFixed(2)}</td><td>${item.signal}</td><td>${Math.round(item.confidence * 100)}%</td></tr>`).join(""); }
       async function loadData() {
-        const tf = timeframeSelect.value;
-        const response = await fetch(`${API_BASE}/timeframe/${tf}`);
+        const response = await fetch(`${API_BASE}/timeframe/${timeframeSelect.value}`);
         const data = await response.json();
         renderRows(data.signals);
         updatedAt.textContent = `Last updated: ${new Date(data.updated_at).toLocaleString()}`;
       }
-
       timeframeSelect.addEventListener("change", loadData);
       loadData();
-      setInterval(loadData, 5 * 60 * 1000);
     </script>
   </body>
 </html>
